@@ -1,0 +1,43 @@
+param (
+    [string[]]$Regions
+)
+
+$OutputDir = "aws-network-inventory"
+
+# If no regions provided → fetch all
+if (-not $Regions -or $Regions.Count -eq 0) {
+    Write-Host "No regions specified. Fetching all regions..."
+    $Regions = (aws ec2 describe-regions --query "Regions[].RegionName" --output text).Split()
+} else {
+    Write-Host "Using provided regions: $($Regions -join ', ')"
+}
+
+New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
+
+Write-Host "Exporting AWS network inventory..."
+
+foreach ($Region in $Regions) {
+    Write-Host "Processing region: $Region"
+
+    $RegionDir = Join-Path $OutputDir $Region
+    New-Item -ItemType Directory -Force -Path $RegionDir | Out-Null
+
+    aws ec2 describe-vpcs --region $Region | Out-File "$RegionDir\vpcs.json"
+    aws ec2 describe-subnets --region $Region | Out-File "$RegionDir\subnets.json"
+    aws ec2 describe-route-tables --region $Region | Out-File "$RegionDir\route_tables.json"
+    aws ec2 describe-internet-gateways --region $Region | Out-File "$RegionDir\igws.json"
+    aws ec2 describe-nat-gateways --region $Region | Out-File "$RegionDir\nat_gateways.json"
+    aws ec2 describe-security-groups --region $Region | Out-File "$RegionDir\security_groups.json"
+    aws ec2 describe-vpc-peering-connections --region $Region | Out-File "$RegionDir\vpc_peering.json"
+
+    # Optional resources
+    try {
+        aws ec2 describe-transit-gateways --region $Region | Out-File "$RegionDir\tgws.json"
+    } catch {}
+
+    try {
+        aws ec2 describe-transit-gateway-attachments --region $Region | Out-File "$RegionDir\tgw_attachments.json"
+    } catch {}
+}
+
+Write-Host "Done. Output in $OutputDir"
