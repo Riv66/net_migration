@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+OUTPUT_DIR="aws-network-inventory"
+REGIONS=$(aws ec2 describe-regions --query "Regions[].RegionName" --output text)
+
+mkdir -p $OUTPUT_DIR
+
+echo "Exporting AWS network inventory..."
+
+for REGION in $REGIONS; do
+  echo "Processing region: $REGION"
+  REGION_DIR="$OUTPUT_DIR/$REGION"
+  mkdir -p $REGION_DIR
+
+  aws ec2 describe-vpcs --region $REGION > $REGION_DIR/vpcs.json
+  aws ec2 describe-subnets --region $REGION > $REGION_DIR/subnets.json
+  aws ec2 describe-route-tables --region $REGION > $REGION_DIR/route_tables.json
+  aws ec2 describe-internet-gateways --region $REGION > $REGION_DIR/igws.json
+  aws ec2 describe-nat-gateways --region $REGION > $REGION_DIR/nat_gateways.json
+  aws ec2 describe-security-groups --region $REGION > $REGION_DIR/security_groups.json
+  aws ec2 describe-vpc-peering-connections --region $REGION > $REGION_DIR/vpc_peering.json
+
+  # Optional (if used)
+  aws ec2 describe-transit-gateways --region $REGION > $REGION_DIR/tgws.json || true
+  aws ec2 describe-transit-gateway-attachments --region $REGION > $REGION_DIR/tgw_attachments.json || true
+
+done
+
+echo "Done. Output in $OUTPUT_DIR/"
