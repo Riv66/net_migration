@@ -48,6 +48,6 @@ foreach ($Region in $Regions) {
 
     Write-Host "  ✔ Completed region: $Region"
     $index++
-}
+                        }
 
 Write-Host "Export complete. Output in '$OutputDir'"
