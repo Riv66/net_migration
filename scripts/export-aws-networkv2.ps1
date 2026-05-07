@@ -46,7 +46,7 @@ foreach ($Region in $Regions) {
     Write-Host "  - NAT Gateways (may be slow)"
     aws ec2 describe-nat-gateways --region $Region > "$RegionDir\nat.json"
 
-    Write-Host "  ✔ Completed region: $Region"
+    Write-Host "Completed region: $Region"
     $index++
                         }
 
