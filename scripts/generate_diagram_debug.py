@@ -24,23 +24,34 @@ def load_json(path):
         debug(f"[NOT A FILE] {path}")
         return {}
 
-    text = path.read_text(encoding="utf-8-sig")
-    debug(f"[SIZE] {path.name}: {len(text)} chars")
+    encodings = ["utf-8-sig", "utf-16", "utf-16-le", "utf-16-be"]
 
-    if not text.strip():
-        debug(f"[EMPTY] {path}")
-        return {}
+    for encoding in encodings:
+        try:
+            text = path.read_text(encoding=encoding)
+            debug(f"[SIZE] {path.name}: {len(text)} chars using {encoding}")
 
-    try:
-        data = json.loads(text)
-        if isinstance(data, dict):
-            debug(f"[OK] {path.name}: top-level keys = {list(data.keys())}")
-            return data
-        debug(f"[WARN] {path.name}: JSON root is not an object")
-        return {}
-    except json.JSONDecodeError as e:
-        debug(f"[INVALID JSON] {path}: {e}")
-        raise ValueError(f"Invalid JSON in {path}: {e}") from e
+            if not text.strip():
+                debug(f"[EMPTY] {path}")
+                return {}
+
+            data = json.loads(text)
+
+            if isinstance(data, dict):
+                debug(f"[OK] {path.name}: top-level keys = {list(data.keys())} using {encoding}")
+                return data
+
+            debug(f"[WARN] {path.name}: JSON root is not an object using {encoding}")
+            return {}
+
+        except UnicodeDecodeError:
+            debug(f"[DECODE FAIL] {path.name} with {encoding}")
+            continue
+        except json.JSONDecodeError as e:
+            debug(f"[INVALID JSON] {path} with {encoding}: {e}")
+            raise ValueError(f"Invalid JSON in {path}: {e}") from e
+
+    raise ValueError(f"Could not decode file with supported encodings: {path}")
 
 
 def is_public(subnet_id, route_tables):
@@ -89,6 +100,7 @@ for region_dir in sorted(p for p in BASE_DIR.iterdir() if p.is_dir()):
     with Diagram(f"AWS Network - {region}", filename=f"diagram_{region}", show=False):
         for vpc in vpcs:
             vpc_id = vpc.get("VpcId", "unknown-vpc")
+
             with Cluster(f"VPC {vpc_id}"):
                 vpc_node = VPC(vpc_id)
                 subnet_nodes = {}
@@ -98,7 +110,12 @@ for region_dir in sorted(p for p in BASE_DIR.iterdir() if p.is_dir()):
                         continue
 
                     subnet_id = subnet.get("SubnetId", "unknown-subnet")
-                    node = PublicSubnet(subnet_id) if is_public(subnet_id, route_tables) else PrivateSubnet(subnet_id)
+
+                    if is_public(subnet_id, route_tables):
+                        node = PublicSubnet(subnet_id)
+                    else:
+                        node = PrivateSubnet(subnet_id)
+
                     subnet_nodes[subnet_id] = node
                     vpc_node >> node
 
