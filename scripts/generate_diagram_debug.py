@@ -11,10 +11,8 @@ from diagrams.aws.network import (
     RouteTable,
     TransitGateway,
     VPC,
-    VPCRouter,
 )
 from diagrams.aws.security import IAMRole
-
 
 BASE_DIR = Path(__file__).resolve().parent / "aws-network-inventory"
 DEBUG = True
@@ -115,7 +113,7 @@ if not BASE_DIR.exists() or not BASE_DIR.is_dir():
 
 for region_dir in sorted(p for p in BASE_DIR.iterdir() if p.is_dir()):
     region = region_dir.name
-    debug(f"\n[REGION] {region}")
+    debug(f"\\n[REGION] {region}")
 
     vpcs = load_optional(region_dir, "vpcs.json", "Vpcs")
     subnets = load_optional(region_dir, "subnets.json", "Subnets")
