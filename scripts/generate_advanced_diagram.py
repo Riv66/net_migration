@@ -52,7 +52,7 @@ from diagrams.aws.network import (
     TransitGateway,
     VPCPeering,
     RouteTable,
-    ElasticNetworkInterface,
+    VPCElasticNetworkInterface,
 )
 from diagrams.aws.security import SecurityIdentityCompliance
 from diagrams.aws.general import General
