@@ -361,7 +361,7 @@ with Diagram(
                                 ]
 
                                 eni_node = (
-                                    ElasticNetworkInterface(
+                                    VPCElasticNetworkInterface(
                                         eni_id
                                     )
                                 )
