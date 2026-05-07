@@ -54,7 +54,7 @@ from diagrams.aws.network import (
     RouteTable,
     VPCElasticNetworkInterface,
 )
-from diagrams.aws.security import SecurityIdentityCompliance
+from diagrams.aws.security import IAM
 from diagrams.aws.general import General
 
 
@@ -341,7 +341,7 @@ with Diagram(
                                 )
 
                                 sg_node = (
-                                    SecurityIdentityCompliance(
+                                    IAM(
                                         sg_name
                                     )
                                 )
