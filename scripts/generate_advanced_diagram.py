@@ -1,500 +1,714 @@
-# generate_advanced_diagram.py
-#
-# Advanced AWS Network Diagram Generator
-#
-# Compatible with exporter structure:
-#
-# aws-network-inventory/
-#   eu-west-1/
-#       vpcs.json
-#       subnets.json
-#       route_tables.json
-#       igws.json
-#       nat.json
-#       security_groups.json
-#       network_interfaces.json
-#       vpc_peering.json
-#       tgws.json
-#       tgw_attachments.json
-#
-# Requirements:
-#   pip install diagrams graphviz
-#
-# ALSO REQUIRED:
-#   Install Graphviz system package:
-#   https://graphviz.org/download/
-#
-# Run:
-#   python generate_advanced_diagram.py
-
 import json
 import os
+from pathlib import Path
+from graphviz import Digraph
 
-from diagrams import Diagram, Cluster, Edge
+# ============================================================
+# AWS Network Dependency Mapper
+# ============================================================
 
-from diagrams.aws.network import (
-    VPC,
-    PublicSubnet,
-    PrivateSubnet,
-    NATGateway,
-    InternetGateway,
-    TransitGateway,
-    VPCPeering,
-    RouteTable,
-    VPCElasticNetworkInterface,
-)
+BASE_DIR = Path("aws-network-inventory")
+OUTPUT_DIR = Path("AWS_Network_Diagrams")
 
-from diagrams.aws.security import IAM
+OUTPUT_DIR.mkdir(exist_ok=True)
 
-BASE_DIR = "aws-network-inventory"
+# ============================================================
+# Region Selection
+# ============================================================
 
+all_regions = sorted([
+    d.name for d in BASE_DIR.iterdir()
+    if d.is_dir()
+])
 
-# =========================================================
+if not all_regions:
+    print("No regions found in aws-network-inventory")
+    exit(1)
+
+print("")
+print("Available regions:")
+print(", ".join(all_regions))
+print("")
+
+regions_input = input(
+    "Enter AWS regions (comma separated) or press Enter for ALL: "
+).strip()
+
+if regions_input:
+    selected_regions = [
+        r.strip() for r in regions_input.split(",")
+        if r.strip() in all_regions
+    ]
+else:
+    selected_regions = all_regions
+
+if not selected_regions:
+    print("No valid regions selected.")
+    exit(1)
+
+print("")
+print(f"Generating diagrams for {len(selected_regions)} region(s)")
+print("")
+
+# ============================================================
 # Helpers
-# =========================================================
+# ============================================================
 
-def load_json(path):
-    if not os.path.exists(path):
+def safe_load_json(path):
+
+    if not path.exists():
+        print(f"Missing: {path}")
         return {}
 
     try:
-        with open(path, "r") as f:
+
+        with open(path, "r", encoding="utf-8-sig") as f:
             return json.load(f)
+
     except Exception as e:
+
         print(f"Failed to load {path}: {e}")
         return {}
 
+def get_name(tags):
 
-def get_name(tags, default):
     if not tags:
-        return default
+        return ""
 
     for tag in tags:
         if tag.get("Key") == "Name":
-            return tag.get("Value")
+            return tag.get("Value", "")
 
-    return default
+    return ""
 
+def shorten(text, length=24):
 
-def is_public(subnet_id, route_tables):
-    """
-    Determine if subnet is public based on IGW route
-    """
+    if not text:
+        return ""
 
-    for rt in route_tables.get("RouteTables", []):
+    if len(text) <= length:
+        return text
+
+    return text[:length] + "..."
+
+# ============================================================
+# Diagram Styles
+# ============================================================
+
+GRAPH_ATTR = {
+    "fontsize": "18",
+    "fontname": "Arial",
+    "rankdir": "LR",
+    "splines": "polyline",
+    "nodesep": "0.5",
+    "ranksep": "1.0"
+}
+
+NODE_ATTR = {
+    "shape": "box",
+    "style": "rounded,filled",
+    "fillcolor": "#F8F9FA",
+    "fontname": "Arial",
+    "fontsize": "10"
+}
+
+EDGE_ATTR = {
+    "fontname": "Arial",
+    "fontsize": "9"
+}
+
+# ============================================================
+# Region Processing
+# ============================================================
+
+for region in selected_regions:
+
+    print(f"Processing region: {region}")
+
+    region_dir = BASE_DIR / region
+
+    output_region = OUTPUT_DIR / region
+
+    output_region.mkdir(exist_ok=True)
+
+    # ========================================================
+    # Load Files
+    # ========================================================
+
+    vpcs = safe_load_json(
+        region_dir / "vpcs.json"
+    ).get("Vpcs", [])
+
+    subnets = safe_load_json(
+        region_dir / "subnets.json"
+    ).get("Subnets", [])
+
+    route_tables = safe_load_json(
+        region_dir / "route_tables.json"
+    ).get("RouteTables", [])
+
+    igws = safe_load_json(
+        region_dir / "igws.json"
+    ).get("InternetGateways", [])
+
+    nat_gateways = safe_load_json(
+        region_dir / "nat.json"
+    ).get("NatGateways", [])
+
+    security_groups = safe_load_json(
+        region_dir / "security_groups.json"
+    ).get("SecurityGroups", [])
+
+    peerings = safe_load_json(
+        region_dir / "vpc_peering.json"
+    ).get("VpcPeeringConnections", [])
+
+    tgws = safe_load_json(
+        region_dir / "tgws.json"
+    ).get("TransitGateways", [])
+
+    tgw_attachments = safe_load_json(
+        region_dir / "tgw_attachments.json"
+    ).get("TransitGatewayAttachments", [])
+
+    # ========================================================
+    # Build Lookup Maps
+    # ========================================================
+
+    subnet_map = {
+        s["SubnetId"]: s
+        for s in subnets
+    }
+
+    vpc_map = {
+        v["VpcId"]: v
+        for v in vpcs
+    }
+
+    # ========================================================
+    # PAGE 1 - VPC CONNECTIVITY
+    # ========================================================
+
+    dot = Digraph(
+        name=f"{region}_vpc_connectivity",
+        format="png"
+    )
+
+    dot.attr(**GRAPH_ATTR)
+    dot.attr("node", **NODE_ATTR)
+    dot.attr("edge", **EDGE_ATTR)
+
+    dot.attr(
+        label=f"{region} - VPC Connectivity",
+        labelloc="t"
+    )
+
+    # ------------------------
+    # VPC Clusters
+    # ------------------------
+
+    for vpc in vpcs:
+
+        vpc_id = vpc["VpcId"]
+
+        vpc_name = get_name(vpc.get("Tags"))
+
+        cidr = vpc.get("CidrBlock", "")
+
+        with dot.subgraph(
+            name=f"cluster_{vpc_id}"
+        ) as c:
+
+            c.attr(
+                label=f"{vpc_name or vpc_id}\n{cidr}",
+                style="rounded"
+            )
+
+            c.node(
+                vpc_id,
+                f"VPC\n{vpc_id}\n{cidr}",
+                fillcolor="#D6EAF8"
+            )
+
+            # Subnets
+            for subnet in subnets:
+
+                if subnet["VpcId"] != vpc_id:
+                    continue
+
+                subnet_id = subnet["SubnetId"]
+
+                subnet_name = get_name(
+                    subnet.get("Tags")
+                )
+
+                az = subnet.get(
+                    "AvailabilityZone",
+                    ""
+                )
+
+                subnet_cidr = subnet.get(
+                    "CidrBlock",
+                    ""
+                )
+
+                label = (
+                    f"{subnet_name or subnet_id}\n"
+                    f"{az}\n"
+                    f"{subnet_cidr}"
+                )
+
+                c.node(
+                    subnet_id,
+                    label,
+                    fillcolor="#D5F5E3"
+                )
+
+                c.edge(vpc_id, subnet_id)
+
+            # IGWs
+            for igw in igws:
+
+                attachments = igw.get(
+                    "Attachments",
+                    []
+                )
+
+                attached = any(
+                    a.get("VpcId") == vpc_id
+                    for a in attachments
+                )
+
+                if attached:
+
+                    igw_id = igw["InternetGatewayId"]
+
+                    c.node(
+                        igw_id,
+                        f"IGW\n{igw_id}",
+                        fillcolor="#FCF3CF"
+                    )
+
+                    c.edge(vpc_id, igw_id)
+
+            # NAT Gateways
+            for nat in nat_gateways:
+
+                if nat.get("VpcId") != vpc_id:
+                    continue
+
+                nat_id = nat["NatGatewayId"]
+
+                c.node(
+                    nat_id,
+                    f"NAT\n{nat_id}",
+                    fillcolor="#FADBD8"
+                )
+
+                subnet_id = nat.get("SubnetId")
+
+                if subnet_id:
+                    c.edge(subnet_id, nat_id)
+
+    # ------------------------
+    # Peering
+    # ------------------------
+
+    for peering in peerings:
+
+        requester = peering.get(
+            "RequesterVpcInfo",
+            {}
+        ).get("VpcId")
+
+        accepter = peering.get(
+            "AccepterVpcInfo",
+            {}
+        ).get("VpcId")
+
+        peering_id = peering.get(
+            "VpcPeeringConnectionId",
+            ""
+        )
+
+        if requester and accepter:
+
+            dot.edge(
+                requester,
+                accepter,
+                label=f"Peering\n{peering_id}",
+                style="dashed"
+            )
+
+    # ------------------------
+    # TGW Attachments
+    # ------------------------
+
+    for tgw in tgws:
+
+        tgw_id = tgw["TransitGatewayId"]
+
+        dot.node(
+            tgw_id,
+            f"TGW\n{tgw_id}",
+            fillcolor="#E8DAEF"
+        )
+
+    for attachment in tgw_attachments:
+
+        tgw_id = attachment.get(
+            "TransitGatewayId"
+        )
+
+        resource_id = attachment.get(
+            "ResourceId"
+        )
+
+        if tgw_id and resource_id:
+
+            dot.edge(
+                resource_id,
+                tgw_id,
+                label="attachment"
+            )
+
+    dot.render(
+        output_region / "vpc_connectivity",
+        cleanup=True
+    )
+
+    # ========================================================
+    # PAGE 2 - ROUTE DEPENDENCIES
+    # ========================================================
+
+    route_dot = Digraph(
+        name=f"{region}_route_dependencies",
+        format="png"
+    )
+
+    route_dot.attr(**GRAPH_ATTR)
+
+    route_dot.attr("node", **NODE_ATTR)
+
+    route_dot.attr("edge", **EDGE_ATTR)
+
+    route_dot.attr(
+        label=f"{region} - Route Dependencies",
+        labelloc="t"
+    )
+
+    for rt in route_tables:
+
+        rt_id = rt["RouteTableId"]
+
+        route_dot.node(
+            rt_id,
+            f"Route Table\n{rt_id}",
+            fillcolor="#D6EAF8"
+        )
+
+        # Associations
+        for assoc in rt.get("Associations", []):
+
+            subnet_id = assoc.get("SubnetId")
+
+            if subnet_id:
+
+                subnet = subnet_map.get(
+                    subnet_id,
+                    {}
+                )
+
+                subnet_label = (
+                    subnet.get("SubnetId", "")
+                    + "\n"
+                    + subnet.get("CidrBlock", "")
+                )
+
+                route_dot.node(
+                    subnet_id,
+                    subnet_label,
+                    fillcolor="#D5F5E3"
+                )
+
+                route_dot.edge(
+                    subnet_id,
+                    rt_id,
+                    label="associated"
+                )
+
+        # Routes
+        for route in rt.get("Routes", []):
+
+            destination = route.get(
+                "DestinationCidrBlock",
+                "local"
+            )
+
+            targets = [
+                route.get("GatewayId"),
+                route.get("NatGatewayId"),
+                route.get("TransitGatewayId"),
+                route.get("VpcPeeringConnectionId")
+            ]
+
+            for target in targets:
+
+                if not target:
+                    continue
+
+                route_dot.node(
+                    target,
+                    target
+                )
+
+                route_dot.edge(
+                    rt_id,
+                    target,
+                    label=destination
+                )
+
+    route_dot.render(
+        output_region / "route_dependencies",
+        cleanup=True
+    )
+
+    # ========================================================
+    # PAGE 3 - SECURITY GROUP RELATIONSHIPS
+    # ========================================================
+
+    sg_dot = Digraph(
+        name=f"{region}_security_groups",
+        format="png"
+    )
+
+    sg_dot.attr(**GRAPH_ATTR)
+
+    sg_dot.attr("node", **NODE_ATTR)
+
+    sg_dot.attr("edge", **EDGE_ATTR)
+
+    sg_dot.attr(
+        label=f"{region} - Security Group Relationships",
+        labelloc="t"
+    )
+
+    for sg in security_groups:
+
+        sg_id = sg["GroupId"]
+
+        sg_name = sg.get("GroupName", "")
+
+        sg_dot.node(
+            sg_id,
+            f"{sg_name}\n{sg_id}",
+            fillcolor="#F9E79F"
+        )
+
+    # Inbound relationships
+    for sg in security_groups:
+
+        sg_id = sg["GroupId"]
+
+        for perm in sg.get("IpPermissions", []):
+
+            protocol = perm.get("IpProtocol", "")
+
+            from_port = perm.get("FromPort", "")
+
+            to_port = perm.get("ToPort", "")
+
+            label = f"{protocol}:{from_port}-{to_port}"
+
+            for pair in perm.get(
+                "UserIdGroupPairs",
+                []
+            ):
+
+                source_sg = pair.get("GroupId")
+
+                if source_sg:
+
+                    sg_dot.edge(
+                        source_sg,
+                        sg_id,
+                        label=label
+                    )
+
+    sg_dot.render(
+        output_region / "security_groups",
+        cleanup=True
+    )
+
+    # ========================================================
+    # PAGE 4 - DEPENDENCY MAP
+    # ========================================================
+
+    dep_dot = Digraph(
+        name=f"{region}_dependency_map",
+        format="png"
+    )
+
+    dep_dot.attr(**GRAPH_ATTR)
+
+    dep_dot.attr("node", **NODE_ATTR)
+
+    dep_dot.attr("edge", **EDGE_ATTR)
+
+    dep_dot.attr(
+        label=f"{region} - Dependency Map",
+        labelloc="t"
+    )
+
+    # VPC -> Subnet
+    for subnet in subnets:
+
+        dep_dot.edge(
+            subnet["VpcId"],
+            subnet["SubnetId"]
+        )
+
+    # Subnet -> RouteTable
+    for rt in route_tables:
+
+        rt_id = rt["RouteTableId"]
 
         for assoc in rt.get("Associations", []):
 
-            if assoc.get("SubnetId") == subnet_id:
+            subnet_id = assoc.get("SubnetId")
 
-                for route in rt.get("Routes", []):
+            if subnet_id:
 
-                    gateway = route.get("GatewayId", "")
-
-                    if gateway.startswith("igw-"):
-                        return True
-
-    return False
-
-
-# =========================================================
-# Global node tracking
-# =========================================================
-
-vpc_nodes = {}
-subnet_nodes = {}
-sg_nodes = {}
-eni_nodes = {}
-tgw_nodes = {}
-
-# Store peerings to process later
-all_peerings = []
-
-
-# =========================================================
-# Main Diagram
-# =========================================================
-
-with Diagram(
-    "AWS Advanced Network Topology",
-    filename="aws_advanced_topology",
-    direction="LR",
-    show=False,
-):
-
-    # =====================================================
-    # Region Processing
-    # =====================================================
-
-    for region in os.listdir(BASE_DIR):
-
-        region_path = os.path.join(BASE_DIR, region)
-
-        if not os.path.isdir(region_path):
-            continue
-
-        print(f"\nProcessing region: {region}")
-
-        # =================================================
-        # Load inventory
-        # =================================================
-
-        vpcs = load_json(
-            f"{region_path}/vpcs.json"
-        ).get("Vpcs", [])
-
-        subnets = load_json(
-            f"{region_path}/subnets.json"
-        ).get("Subnets", [])
-
-        route_tables = load_json(
-            f"{region_path}/route_tables.json"
-        )
-
-        igws = load_json(
-            f"{region_path}/igws.json"
-        ).get("InternetGateways", [])
-
-        nats = load_json(
-            f"{region_path}/nat.json"
-        ).get("NatGateways", [])
-
-        sgs = load_json(
-            f"{region_path}/security_groups.json"
-        ).get("SecurityGroups", [])
-
-        enis = load_json(
-            f"{region_path}/network_interfaces.json"
-        ).get("NetworkInterfaces", [])
-
-        peerings = load_json(
-            f"{region_path}/vpc_peering.json"
-        ).get("VpcPeeringConnections", [])
-
-        tgws = load_json(
-            f"{region_path}/tgws.json"
-        ).get("TransitGateways", [])
-
-        tgw_attachments = load_json(
-            f"{region_path}/tgw_attachments.json"
-        ).get("TransitGatewayAttachments", [])
-
-        print(f"Loaded {len(vpcs)} VPCs")
-        print(f"Loaded {len(subnets)} subnets")
-        print(f"Loaded {len(route_tables.get('RouteTables', []))} route tables")
-        print(f"Loaded {len(igws)} internet gateways")
-        print(f"Loaded {len(nats)} NAT gateways")
-        print(f"Loaded {len(sgs)} security groups")
-        print(f"Loaded {len(enis)} ENIs")
-        print(f"Loaded {len(peerings)} VPC peerings")
-        print(f"Loaded {len(tgws)} Transit Gateways")
-
-        # Save peerings for later
-        all_peerings.extend(peerings)
-
-        # =================================================
-        # Region Cluster
-        # =================================================
-
-        with Cluster(f"Region {region}"):
-
-            # =============================================
-            # Transit Gateways
-            # =============================================
-
-            for tgw in tgws:
-
-                tgw_id = tgw["TransitGatewayId"]
-
-                tgw_node = TransitGateway(tgw_id)
-
-                tgw_nodes[tgw_id] = tgw_node
-
-            # =============================================
-            # VPC Processing
-            # =============================================
-
-            for vpc in vpcs:
-
-                vpc_id = vpc["VpcId"]
-
-                vpc_name = get_name(
-                    vpc.get("Tags"),
-                    vpc_id
+                dep_dot.edge(
+                    subnet_id,
+                    rt_id
                 )
 
-                print(f"  VPC: {vpc_name}")
-
-                with Cluster(f"VPC {vpc_name}"):
-
-                    # =====================================
-                    # VPC Node
-                    # =====================================
-
-                    vpc_node = VPC(vpc_name)
-
-                    vpc_nodes[vpc_id] = vpc_node
-
-                    # =====================================
-                    # Route Tables
-                    # =====================================
-
-                    rt_nodes = {}
-
-                    for rt in route_tables.get(
-                        "RouteTables", []
-                    ):
-
-                        if rt["VpcId"] != vpc_id:
-                            continue
-
-                        rt_id = rt["RouteTableId"]
-
-                        rt_node = RouteTable(rt_id)
-
-                        rt_nodes[rt_id] = rt_node
-
-                        vpc_node >> rt_node
-
-                    # =====================================
-                    # Subnets
-                    # =====================================
-
-                    for subnet in subnets:
-
-                        if subnet["VpcId"] != vpc_id:
-                            continue
-
-                        subnet_id = subnet["SubnetId"]
-
-                        subnet_name = get_name(
-                            subnet.get("Tags"),
-                            subnet_id
-                        )
-
-                        # Public/private detection
-                        if is_public(
-                            subnet_id,
-                            route_tables
-                        ):
-                            subnet_node = PublicSubnet(
-                                subnet_name
-                            )
-                        else:
-                            subnet_node = PrivateSubnet(
-                                subnet_name
-                            )
-
-                        subnet_nodes[subnet_id] = subnet_node
-
-                        vpc_node >> subnet_node
-
-                        # =================================
-                        # Route Table Associations
-                        # =================================
-
-                        for rt in route_tables.get(
-                            "RouteTables", []
-                        ):
-
-                            for assoc in rt.get(
-                                "Associations", []
-                            ):
-
-                                if assoc.get(
-                                    "SubnetId"
-                                ) == subnet_id:
-
-                                    rt_id = rt[
-                                        "RouteTableId"
-                                    ]
-
-                                    if rt_id in rt_nodes:
-
-                                        rt_nodes[
-                                            rt_id
-                                        ] >> Edge(
-                                            label="assoc"
-                                        ) >> subnet_node
-
-                    # =====================================
-                    # Internet Gateways
-                    # =====================================
-
-                    for igw in igws:
-
-                        for attachment in igw.get(
-                            "Attachments", []
-                        ):
-
-                            if (
-                                attachment["VpcId"]
-                                == vpc_id
-                            ):
-
-                                igw_id = igw[
-                                    "InternetGatewayId"
-                                ]
-
-                                igw_node = (
-                                    InternetGateway(
-                                        igw_id
-                                    )
-                                )
-
-                                vpc_node >> igw_node
-
-                    # =====================================
-                    # NAT Gateways
-                    # =====================================
-
-                    for nat in nats:
-
-                        if nat["VpcId"] != vpc_id:
-                            continue
-
-                        nat_id = nat["NatGatewayId"]
-
-                        nat_node = NATGateway(
-                            nat_id
-                        )
-
-                        subnet_id = nat.get(
-                            "SubnetId"
-                        )
-
-                        if subnet_id in subnet_nodes:
-
-                            subnet_nodes[
-                                subnet_id
-                            ] >> nat_node
-
-                    # =====================================
-                    # Security Groups
-                    # =====================================
-
-                    for sg in sgs:
-
-                        if sg["VpcId"] != vpc_id:
-                            continue
-
-                        sg_id = sg["GroupId"]
-
-                        sg_name = get_name(
-                            sg.get("Tags"),
-                            sg["GroupName"]
-                        )
-
-                        sg_node = IAM(sg_name)
-
-                        sg_nodes[sg_id] = sg_node
-
-                        vpc_node >> sg_node
-
-                    # =====================================
-                    # ENIs
-                    # =====================================
-
-                    for eni in enis:
-
-                        eni_id = eni[
-                            "NetworkInterfaceId"
-                        ]
-
-                        eni_node = (
-                            VPCElasticNetworkInterface(
-                                eni_id
-                            )
-                        )
-
-                        eni_nodes[eni_id] = eni_node
-
-                        subnet_id = eni.get(
-                            "SubnetId"
-                        )
-
-                        if subnet_id in subnet_nodes:
-
-                            subnet_nodes[
-                                subnet_id
-                            ] >> eni_node
-
-                        # SG -> ENI
-                        for group in eni.get(
-                            "Groups", []
-                        ):
-
-                            sg_id = group["GroupId"]
-
-                            if sg_id in sg_nodes:
-
-                                sg_nodes[
-                                    sg_id
-                                ] >> Edge(
-                                    label="attached"
-                                ) >> eni_node
-
-            # =============================================
-            # Transit Gateway Attachments
-            # =============================================
-
-            for attachment in tgw_attachments:
-
-                tgw_id = attachment.get(
-                    "TransitGatewayId"
-                )
-
-                resource_id = attachment.get(
-                    "ResourceId"
-                )
-
-                if (
-                    tgw_id in tgw_nodes
-                    and resource_id in vpc_nodes
-                ):
-
-                    tgw_nodes[
-                        tgw_id
-                    ] >> Edge(
-                        label="attachment"
-                    ) >> vpc_nodes[
-                        resource_id
-                    ]
-
-    # =====================================================
-    # VPC Peering (cross-region capable)
-    # =====================================================
-
-    for peering in all_peerings:
-
-        requester = peering[
-            "RequesterVpcInfo"
-        ]["VpcId"]
-
-        accepter = peering[
-            "AccepterVpcInfo"
-        ]["VpcId"]
-
-        peering_id = peering[
-            "VpcPeeringConnectionId"
-        ]
-
-        if (
-            requester in vpc_nodes
-            and accepter in vpc_nodes
-        ):
-
-            peering_node = VPCPeering(
-                peering_id
-            )
-
-            vpc_nodes[
-                requester
-            ] >> peering_node >> vpc_nodes[
-                accepter
+        # RouteTable -> targets
+        for route in rt.get("Routes", []):
+
+            targets = [
+                route.get("GatewayId"),
+                route.get("NatGatewayId"),
+                route.get("TransitGatewayId")
             ]
 
+            for target in targets:
 
-print("\nDiagram generation complete.")
-print("Output file:")
-print("  aws_advanced_topology.png") 
+                if target:
+
+                    dep_dot.edge(
+                        rt_id,
+                        target
+                    )
+
+    # NAT -> Subnet
+    for nat in nat_gateways:
+
+        nat_id = nat["NatGatewayId"]
+
+        subnet_id = nat.get("SubnetId")
+
+        if subnet_id:
+
+            dep_dot.edge(
+                subnet_id,
+                nat_id
+            )
+
+    dep_dot.render(
+        output_region / "dependency_map",
+        cleanup=True
+    )
+
+# ============================================================
+# GLOBAL OVERVIEW
+# ============================================================
+
+print("")
+print("Generating global overview...")
+
+global_dot = Digraph(
+    "global_overview",
+    format="png"
+)
+
+global_dot.attr(**GRAPH_ATTR)
+
+global_dot.attr(
+    label="AWS Global VPC Connectivity",
+    labelloc="t"
+)
+
+for region in selected_regions:
+
+    region_dir = BASE_DIR / region
+
+    vpcs = safe_load_json(
+        region_dir / "vpcs.json"
+    ).get("Vpcs", [])
+
+    peerings = safe_load_json(
+        region_dir / "vpc_peering.json"
+    ).get("VpcPeeringConnections", [])
+
+    with global_dot.subgraph(
+        name=f"cluster_{region}"
+    ) as c:
+
+        c.attr(label=region)
+
+        for vpc in vpcs:
+
+            vpc_id = vpc["VpcId"]
+
+            cidr = vpc.get(
+                "CidrBlock",
+                ""
+            )
+
+            c.node(
+                vpc_id,
+                f"{vpc_id}\n{cidr}"
+            )
+
+    for peering in peerings:
+
+        requester = peering.get(
+            "RequesterVpcInfo",
+            {}
+        ).get("VpcId")
+
+        accepter = peering.get(
+            "AccepterVpcInfo",
+            {}
+        ).get("VpcId")
+
+        if requester and accepter:
+
+            global_dot.edge(
+                requester,
+                accepter,
+                style="dashed"
+            )
+
+global_dot.render(
+    OUTPUT_DIR / "global_overview",
+    cleanup=True
+)
+
+print("")
+print("Diagram generation complete.")
+print("")
+print("Output:")
+print(f"  {OUTPUT_DIR.resolve()}")
+print("")
+print("Generated:")
+print("  - global_overview.png")
+print("  - vpc_connectivity.png")
+print("  - route_dependencies.png")
+print("  - security_groups.png")
+print("  - dependency_map.png")
+print("")
+print("Per-region diagrams located in:")
+print("  AWS_Network_Diagrams/<region>/")
