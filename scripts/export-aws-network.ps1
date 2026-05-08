@@ -31,82 +31,135 @@ foreach ($Region in $Regions) {
 
     New-Item -ItemType Directory -Force -Path $RegionDir | Out-Null
 
-    # Helper function
     function Export-AwsJson {
+
         param (
             [string]$Command,
-            [string]$File
+            [string]$File,
+            [string]$EmptyRootKey
         )
 
-        Write-Host "  - $File"
+        $FilePath = Join-Path $RegionDir $File
+
+        Write-Host "  - Exporting $File"
 
         try {
 
-            $output = Invoke-Expression $Command
+            # Execute AWS CLI
+            $output = Invoke-Expression $Command 2>&1
 
-            $output | Set-Content `
-                -Path "$RegionDir\$File" `
-                -Encoding utf8
+            # Detect AWS CLI errors
+            if ($LASTEXITCODE -ne 0) {
 
+                throw $output
+            }
+
+            # Validate JSON before writing
+            try {
+
+                $parsed = $output | ConvertFrom-Json
+
+                # Write normalized JSON
+                $parsed | ConvertTo-Json -Depth 100 | Set-Content `
+                    -Path $FilePath `
+                    -Encoding utf8
+
+                Write-Host "    OK"
+
+            }
+            catch {
+
+                Write-Host "    INVALID JSON RETURNED"
+
+                # Create valid empty structure
+                $emptyObject = @{
+                    $EmptyRootKey = @()
+                }
+
+                $emptyObject | ConvertTo-Json -Depth 5 | Set-Content `
+                    -Path $FilePath `
+                    -Encoding utf8
+
+                Write-Host "    Wrote empty fallback JSON"
+            }
         }
         catch {
 
             Write-Host "    ERROR: $_"
 
-            "{}" | Set-Content `
-                -Path "$RegionDir\$File" `
+            # Always write VALID JSON
+            $emptyObject = @{
+                $EmptyRootKey = @()
+            }
+
+            $emptyObject | ConvertTo-Json -Depth 5 | Set-Content `
+                -Path $FilePath `
                 -Encoding utf8
+        }
+
+        # Verify file exists and size
+        if (Test-Path $FilePath) {
+
+            $size = (Get-Item $FilePath).Length
+
+            Write-Host "    Saved ($size bytes)"
+        }
+        else {
+
+            Write-Host "    FAILED TO CREATE FILE"
         }
     }
 
     Export-AwsJson `
         "aws ec2 describe-vpcs --region $Region --output json" `
-        "vpcs.json"
+        "vpcs.json" `
+        "Vpcs"
 
     Export-AwsJson `
         "aws ec2 describe-subnets --region $Region --output json" `
-        "subnets.json"
+        "subnets.json" `
+        "Subnets"
 
     Export-AwsJson `
         "aws ec2 describe-route-tables --region $Region --output json" `
-        "route_tables.json"
+        "route_tables.json" `
+        "RouteTables"
 
     Export-AwsJson `
         "aws ec2 describe-internet-gateways --region $Region --output json" `
-        "igws.json"
+        "igws.json" `
+        "InternetGateways"
 
     Export-AwsJson `
         "aws ec2 describe-nat-gateways --region $Region --output json" `
-        "nat.json"
+        "nat_gateways.json" `
+        "NatGateways"
 
     Export-AwsJson `
         "aws ec2 describe-security-groups --region $Region --output json" `
-        "security_groups.json"
+        "security_groups.json" `
+        "SecurityGroups"
 
     Export-AwsJson `
         "aws ec2 describe-network-interfaces --region $Region --output json" `
-        "network_interfaces.json"
+        "network_interfaces.json" `
+        "NetworkInterfaces"
 
     Export-AwsJson `
         "aws ec2 describe-vpc-peering-connections --region $Region --output json" `
-        "vpc_peering.json"
+        "vpc_peering.json" `
+        "VpcPeeringConnections"
 
-    # Optional TGW resources
-    try {
+    # Transit Gateway resources
+    Export-AwsJson `
+        "aws ec2 describe-transit-gateways --region $Region --output json" `
+        "tgws.json" `
+        "TransitGateways"
 
-        Export-AwsJson `
-            "aws ec2 describe-transit-gateways --region $Region --output json" `
-            "tgws.json"
-
-        Export-AwsJson `
-            "aws ec2 describe-transit-gateway-attachments --region $Region --output json" `
-            "tgw_attachments.json"
-
-    }
-    catch {
-
-        Write-Host "  - No Transit Gateway resources"
-    }
+    Export-AwsJson `
+        "aws ec2 describe-transit-gateway-attachments --region $Region --output json" `
+        "tgw_attachments.json" `
+        "TransitGatewayAttachments"
 
     $index++
 }
